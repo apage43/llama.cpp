@@ -1,0 +1,4 @@
+Answer all questions using the following image: <Img>{softprompt}</Img>
+
+### Human: Describe the image precisely and in detail, but only include details you are confident about.
+### Assistant:

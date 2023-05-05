@@ -226,6 +226,11 @@ struct llama_context {
     // input embedding (1-dimensional array: [n_embd])
     std::vector<float> embedding;
 
+    // soft prompt
+    std::vector<float> soft_prompt;
+    int soft_prompt_pos = -1;
+    int soft_prompt_len = 0;
+
     // memory buffers used to evaluate the model
     // TODO: move in llama_state
     llama_ctx_buffer buf_compute;
@@ -1091,6 +1096,21 @@ static bool llama_eval_internal(
     memcpy(embd->data, tokens, N*ggml_element_size(embd));
 
     struct ggml_tensor * inpL = ggml_get_rows(ctx0, model.tok_embeddings, embd);
+
+    if (n_past < (lctx.soft_prompt_pos + lctx.soft_prompt_len) &&
+        (n_past + N) > (lctx.soft_prompt_pos)) {
+        int spoff = std::max(0, (n_past - lctx.soft_prompt_pos));
+        int splen = std::min(lctx.soft_prompt_len, (N+n_past) - lctx.soft_prompt_pos - spoff);
+        struct ggml_tensor * sprompt = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, splen, n_embd);
+        memcpy(sprompt->data, lctx.soft_prompt.data() + n_embd * spoff, ggml_element_size(sprompt) * splen * n_embd);
+        struct ggml_tensor * dst = ggml_view_2d(ctx0, inpL, splen, n_embd, 
+            splen * ggml_element_size(sprompt),
+            (lctx.soft_prompt_pos - n_past) * n_embd * ggml_element_size(sprompt)
+        );
+        struct ggml_tensor * cpy = ggml_cpy(ctx0, sprompt, dst);
+        ggml_build_forward_expand(&gf, cpy);
+        // ggml_graph_compute(ctx0, &gf);
+    }
 
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * inpSA = inpL;
@@ -2380,6 +2400,15 @@ int llama_apply_lora_from_file_internal(struct llama_context * ctx, const char *
     fprintf(stderr, " done (%.2f ms)\n", t_lora_us / 1000.0);
 
     return 0;
+}
+
+void llama_set_soft_prompt(struct llama_context * ctx, int pos, int n_tokens, float * data) {
+    uint32_t n_embd = ctx->model.hparams.n_embd;
+    size_t datasize = n_embd * n_tokens;
+    ctx->soft_prompt.resize(datasize);
+    memcpy(ctx->soft_prompt.data(), data, datasize * sizeof(float));
+    ctx->soft_prompt_len = n_tokens;
+    ctx->soft_prompt_pos = pos;
 }
 
 int llama_apply_lora_from_file(struct llama_context * ctx, const char * path_lora, const char * path_base_model, int n_threads) {

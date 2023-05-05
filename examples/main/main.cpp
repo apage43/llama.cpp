@@ -165,8 +165,42 @@ int main(int argc, char ** argv) {
         }
     }
 
-    // tokenize the prompt
-    auto embd_inp = ::llama_tokenize(ctx, params.prompt, true);
+    std::vector<llama_token> embd_inp;
+    auto sp_pos = params.prompt.find(params.softprompt_placeholder);
+    if (!params.softprompt.empty() && sp_pos != std::string::npos) {
+        std::string pfx = params.prompt.substr(0, sp_pos);
+        std::string sfx = params.prompt.substr(sp_pos + params.softprompt_placeholder.length());
+        embd_inp = ::llama_tokenize(ctx, pfx, true);
+        auto sfx_tokens = ::llama_tokenize(ctx, sfx, false);
+        FILE* sp_binf = std::fopen(params.softprompt.c_str(), "rb");
+        if (sp_binf == nullptr) {
+            fprintf(stderr, "%s: error: could not read softprompt file %s", __func__, params.softprompt.c_str());
+            return 1;
+        }
+        int ntok, dim;
+        std::vector<float> spdata;
+        if(fread(&ntok, sizeof(int), 1, sp_binf) != 1) {
+            fprintf(stderr, "%s: error: could not read softprompt file %s", __func__, params.softprompt.c_str());
+            return 1;
+        }
+        if(fread(&dim, sizeof(int), 1, sp_binf) != 1) {
+            fprintf(stderr, "%s: error: could not read softprompt file %s", __func__, params.softprompt.c_str());
+            return 1;
+        }
+        spdata.resize(ntok * dim);
+        if(fread(spdata.data(), sizeof(float), ntok*dim, sp_binf) != (size_t)(ntok*dim)) {
+            fprintf(stderr, "%s: error: could not read softprompt file %s", __func__, params.softprompt.c_str());
+            return 1;
+        }
+        fclose(sp_binf);
+        auto last = embd_inp.back();
+        auto soft_prompt_pos = embd_inp.size();
+        embd_inp.resize(embd_inp.size() + ntok, last);
+        embd_inp.insert(embd_inp.end(), sfx_tokens.begin(), sfx_tokens.end());
+        llama_set_soft_prompt(ctx, soft_prompt_pos, ntok, spdata.data());
+    } else {
+        embd_inp = ::llama_tokenize(ctx, params.prompt, true);
+    }
 
     const int n_ctx = llama_n_ctx(ctx);
 
